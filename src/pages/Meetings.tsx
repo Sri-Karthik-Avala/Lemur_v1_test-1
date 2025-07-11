@@ -9,7 +9,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar as CalendarIcon, List, Grid, Plus, Users, Video, FileText, ArrowRight, ArrowLeft, PlayCircle, BookOpen, StickyNote, Bot, Video as VideoIcon } from 'lucide-react';
+import { Calendar as CalendarIcon, List, Grid, Plus, Users, Video, FileText, ArrowRight, ArrowLeft, PlayCircle, BookOpen, StickyNote, Bot, Video as VideoIcon, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Navbar } from '../components/Navbar';
 import { Button } from '../components/Button';
@@ -53,16 +53,30 @@ export const Meetings: React.FC = () => {
 
         const mapped: Meeting[] = (raw || []).map((m: any) => {
           const statusRaw = (m["Meeting status"] || '').toLowerCase();
-          const status: any = ['in_waiting_room', 'in_progress', 'joining', 'waiting', 'call_started'].includes(statusRaw)
-            ? 'in_progress'
-            : ['done', 'call_ended', 'media_expired', 'completed', 'finished'].includes(statusRaw)
-            ? 'completed'
-            : statusRaw || 'unknown'; // Keep original status or set as 'unknown'
+          
+          // Enhanced status mapping to handle bot states
+          let status: any;
+          
+          // Handle bot recording states
+          if (['bot.in_call_recording', 'in_call_recording'].includes(statusRaw)) {
+            status = 'in_call_recording';
+          } else if (['bot.joining_call', 'bot.in_waiting_room', 'bot.in_call_not_recording', 'bot.recording_permission_allowed'].includes(statusRaw)) {
+            status = 'in_progress';
+          } else if (['in_waiting_room', 'in_progress', 'joining', 'waiting', 'call_started'].includes(statusRaw)) {
+            status = 'in_progress';
+          } else if (['bot.call_ended', 'bot.done', 'done', 'call_ended', 'media_expired', 'completed', 'finished'].includes(statusRaw)) {
+            status = 'completed';
+          } else if (['bot.fatal', 'bot.recording_permission_denied'].includes(statusRaw)) {
+            status = 'failed';
+          } else {
+            status = statusRaw || 'unknown';
+          }
 
           return {
             id: String(m.id),
             title: m["Meeting title"] || 'Untitled Meeting',
-            description: status === 'in_progress' ? 'Meeting is currently in progress. Come back after it is done.' : '',
+            description: status === 'in_call_recording' ? 'Bot is currently recording the meeting.' : 
+                        status === 'in_progress' ? 'Meeting is currently in progress.' : '',
             meetingLink: '',
             date: m["Date"],
             startTime: (m["Time start"] || '').substring(0,5) || '00:00',
@@ -75,6 +89,7 @@ export const Meetings: React.FC = () => {
             bot_id: m["Bot id"],
             actionItems: [],
             tags: [],
+            botStatus: statusRaw, // Store original bot status for reference
           } as Meeting;
         });
 
@@ -97,7 +112,7 @@ export const Meetings: React.FC = () => {
         const meetingStart = new Date(`${meeting.date}T${meeting.startTime}`);
         const timeDiff = now.getTime() - meetingStart.getTime();
         
-        if (timeDiff > 120000 && meeting.status === 'in_progress') { // 2 minutes
+        if (timeDiff > 120000 && (meeting.status === 'in_progress' || meeting.status === 'in_call_recording')) { // 2 minutes
           const completedMeeting = {
             ...meeting,
             status: 'completed' as const,
@@ -110,7 +125,7 @@ export const Meetings: React.FC = () => {
 
       // Check if any meetings were completed
       const newlyCompleted = updatedMeetings.filter((meeting, index) => 
-        meeting.status === 'completed' && allMeetings[index]?.status === 'in_progress'
+        meeting.status === 'completed' && (allMeetings[index]?.status === 'in_progress' || allMeetings[index]?.status === 'in_call_recording')
       );
 
       if (newlyCompleted.length > 0) {
@@ -144,17 +159,21 @@ export const Meetings: React.FC = () => {
   }, [allMeetings]);
 
   // Categorize meetings based on status
+  const recordingMeetings = allMeetings.filter(m => m.status === 'in_call_recording');
   const activeMeetings = allMeetings.filter(m => m.status === 'in_progress');
   const upcomingMeetings = allMeetings.filter(m => m.status === 'scheduled');
   const completedMeetings = allMeetings.filter(m => ['completed', 'done', 'call_ended', 'media_expired', 'finished'].includes(String(m.status)));
-  const unknownMeetings = allMeetings.filter(m => !['in_progress', 'scheduled', 'completed', 'done', 'call_ended', 'media_expired', 'finished'].includes(String(m.status)));
+  const failedMeetings = allMeetings.filter(m => m.status === 'failed');
+  const unknownMeetings = allMeetings.filter(m => !['in_call_recording', 'in_progress', 'scheduled', 'completed', 'done', 'call_ended', 'media_expired', 'finished', 'failed'].includes(String(m.status)));
 
   // Debug: Log meetings data
   console.log('🔍 Meetings Page Debug:', {
     totalMeetings: allMeetings.length,
-    upcomingMeetings: upcomingMeetings.length,
+    recordingMeetings: recordingMeetings.length,
     activeMeetings: activeMeetings.length,
+    upcomingMeetings: upcomingMeetings.length,
     completedMeetings: completedMeetings.length,
+    failedMeetings: failedMeetings.length,
     unknownMeetings: unknownMeetings.length,
     calendarView
   });
@@ -228,6 +247,8 @@ export const Meetings: React.FC = () => {
   // Helper function to get status color and label
   const getStatusInfo = (status: string) => {
     switch (status) {
+      case 'in_call_recording':
+        return { color: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', label: 'Recording' };
       case 'in_progress':
         return { color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400', label: 'In Progress' };
       case 'scheduled':
@@ -238,27 +259,121 @@ export const Meetings: React.FC = () => {
       case 'media_expired':
       case 'finished':
         return { color: 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400', label: 'Completed' };
+      case 'failed':
+        return { color: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', label: 'Failed' };
       default:
         return { color: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400', label: status || 'Unknown' };
     }
   };
 
-  // Banner for ongoing meetings (in_progress)
-  const ongoingMeetingsBanner = activeMeetings.length > 0 && (
-    <div className="mb-6 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg">
-      <div className="font-semibold text-yellow-900 dark:text-yellow-100 mb-2">
-        Ongoing Meeting(s)
+  // Helper function to get bot status description
+  const getBotStatusDescription = (botStatus: string) => {
+    switch (botStatus) {
+      case 'bot.joining_call':
+        return 'Bot is connecting to the meeting...';
+      case 'bot.in_waiting_room':
+        return 'Bot is waiting in the meeting room';
+      case 'bot.in_call_not_recording':
+        return 'Bot joined but not recording yet';
+      case 'bot.recording_permission_allowed':
+        return 'Recording permission granted';
+      case 'bot.recording_permission_denied':
+        return 'Recording permission denied';
+      case 'bot.in_call_recording':
+        return 'Bot is actively recording the meeting';
+      case 'bot.call_ended':
+        return 'Bot has left the call';
+      case 'bot.done':
+        return 'Recording complete and uploaded';
+      case 'bot.fatal':
+        return 'Bot encountered an error';
+      default:
+        return 'Bot status unknown';
+    }
+  };
+
+  // Banner for ongoing meetings that are being recorded
+  const ongoingMeetingsBanner = recordingMeetings.length > 0 && (
+    <motion.div
+      initial={{ opacity: 0, y: -20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+      className="mb-6 p-4 bg-gradient-to-r from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20 border border-red-200 dark:border-red-700 rounded-lg shadow-sm"
+    >
+      <div className="flex items-center gap-3 mb-3">
+        <div className="relative">
+          <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+          <div className="absolute inset-0 w-3 h-3 bg-red-500 rounded-full animate-ping opacity-75"></div>
+        </div>
+        <div className="font-semibold text-red-900 dark:text-red-100 text-lg">
+          Ongoing Meetings - Recording in Progress
+        </div>
+        <div className="ml-auto bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200 px-3 py-1 rounded-full text-sm font-medium">
+          {recordingMeetings.length} meeting{recordingMeetings.length > 1 ? 's' : ''}
+        </div>
       </div>
-      <ul className="space-y-2">
-        {activeMeetings.map((meeting) => (
-          <li key={meeting.id} className="flex flex-col sm:flex-row sm:items-center gap-2 text-sm text-yellow-800 dark:text-yellow-200">
-            <span>Meeting ID: <span className="font-mono">{meeting.id}</span></span>
-            <span>Bot ID: <span className="font-mono">{meeting.bot_id || 'N/A'}</span></span>
-            <span className="italic">Lemur joined</span>
-          </li>
+      
+      <div className="text-sm text-red-800 dark:text-red-200 mb-4">
+        <Bot className="inline h-4 w-4 mr-1" />
+        Lemur AI bots are currently recording {recordingMeetings.length} meeting{recordingMeetings.length > 1 ? 's' : ''}. 
+        Transcripts and analysis will be available once the meeting{recordingMeetings.length > 1 ? 's' : ''} conclude{recordingMeetings.length === 1 ? 's' : ''}.
+      </div>
+
+      {/* Recording Meetings List */}
+      <div className="flex flex-col gap-3">
+        {recordingMeetings.map((meeting) => (
+          <div
+            key={meeting.id}
+            className="rounded-lg bg-white dark:bg-gray-900 shadow-sm border border-red-200 dark:border-red-700 p-4 flex items-center gap-4 transition-all duration-200 cursor-pointer hover:scale-[1.01] hover:shadow-md"
+            onClick={() => handleMeetingClick(meeting)}
+          >
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Video className="h-8 w-8 text-red-500" />
+                <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+              </div>
+            </div>
+            
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-base mb-1 text-gray-900 dark:text-white">
+                {meeting.title}
+              </div>
+              <div className="text-sm text-gray-600 dark:text-gray-300 mb-1">
+                {formatMeetingTime(meeting)}
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-2 py-1 rounded-full text-xs font-medium">
+                  Recording
+                </div>
+                <div className={cn(
+                  "px-2 py-1 rounded-full text-xs font-medium",
+                  meeting.meetingType === 'external' 
+                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" 
+                    : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                )}>
+                  {meeting.meetingType}
+                </div>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                Meeting ID: <span className="font-mono">{meeting.id}</span>
+                {meeting.bot_id && (
+                  <span className="ml-3">
+                    Bot ID: <span className="font-mono">{meeting.bot_id}</span>
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-red-600 dark:text-red-400 font-medium">
+                {getBotStatusDescription(meeting.botStatus || meeting.status)}
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <ArrowRight className="h-5 w-5 text-gray-400" />
+            </div>
+          </div>
         ))}
-      </ul>
-    </div>
+      </div>
+    </motion.div>
   );
 
   // --- UI ---
@@ -269,6 +384,7 @@ export const Meetings: React.FC = () => {
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {/* Ongoing Meetings Banner */}
         {ongoingMeetingsBanner}
+        
         <motion.div
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
@@ -294,7 +410,7 @@ export const Meetings: React.FC = () => {
             </Button>
           </div>
 
-          {/* Active Meetings Alert */}
+          {/* Active Meetings Alert (for meetings in progress but not recording) */}
           {activeMeetings.length > 0 && (
             <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg">
               <div className="flex items-center gap-2 mb-2">
@@ -304,7 +420,7 @@ export const Meetings: React.FC = () => {
                 </span>
               </div>
               <p className="text-sm text-blue-800 dark:text-blue-200 mb-4">
-                AI bots are currently recording {activeMeetings.length} meeting{activeMeetings.length > 1 ? 's' : ''}. They will automatically appear in Previous Meetings when completed.
+                AI bots are currently setting up for {activeMeetings.length} meeting{activeMeetings.length > 1 ? 's' : ''}. They will automatically appear in Previous Meetings when completed.
               </p>
 
               {/* Active Meetings List */}
@@ -326,7 +442,45 @@ export const Meetings: React.FC = () => {
                         Status: {meeting.status.replace('_', ' ')}
                       </div>
                       <div className="text-xs text-gray-500 dark:text-gray-400">
-                        Bot is recording. Come back after the meeting is done.
+                        {getBotStatusDescription(meeting.botStatus || meeting.status)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Failed Meetings Alert */}
+          {failedMeetings.length > 0 && (
+            <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+                <span className="font-medium text-red-900 dark:text-red-100">
+                  {failedMeetings.length} Failed Meeting{failedMeetings.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              <p className="text-sm text-red-800 dark:text-red-200 mb-4">
+                Some meetings encountered issues with bot recording. Please check the details below.
+              </p>
+
+              {/* Failed Meetings List */}
+              <div className="flex flex-col gap-3">
+                {failedMeetings.map((meeting) => (
+                  <div
+                    key={meeting.id}
+                    className="rounded-lg bg-white dark:bg-gray-900 shadow-sm border border-red-200 dark:border-red-700 p-4 flex items-center gap-4 transition-all duration-200 cursor-pointer hover:scale-[1.01]"
+                    onClick={() => handleMeetingClick(meeting)}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-base mb-1 text-gray-900 dark:text-white">
+                        {meeting.title}
+                      </div>
+                      <div className="text-sm text-gray-600 dark:text-gray-300 mb-1">
+                        {formatMeetingTime(meeting)}
+                      </div>
+                      <div className="text-xs text-red-600 dark:text-red-400 font-medium">
+                        {getBotStatusDescription(meeting.botStatus || meeting.status)}
                       </div>
                     </div>
                   </div>
@@ -427,6 +581,8 @@ export const Meetings: React.FC = () => {
               </div>
               
               {/* Previous Meetings */}
+              
+            
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
@@ -515,7 +671,7 @@ export const Meetings: React.FC = () => {
                 <div>
                   <div className="flex items-center gap-2 mb-4">
                     <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
-                      Other Meetings
+                      Ongoing or Unknown Meetings
                     </h3>
                     <StickyNote className="h-5 w-5 text-yellow-500 dark:text-yellow-400" />
                     <span className="text-sm text-gray-500 dark:text-gray-400 ml-auto">
