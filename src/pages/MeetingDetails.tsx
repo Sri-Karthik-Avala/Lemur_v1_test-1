@@ -195,6 +195,24 @@ export const MeetingDetails: React.FC = () => {
     }
   }, [meeting]);
 
+  // Poll for ongoing meeting updates
+  useEffect(() => {
+    if (!meeting || meeting.status !== 'in_progress') return;
+    const interval = setInterval(async () => {
+      try {
+        const meetings = await ApiService.getMyMeetings();
+        const updated = meetings.find((m: any) => m.id === meeting.id);
+        if (updated) {
+          setMeeting((prev) => ({ ...prev, ...updated }));
+        }
+      } catch (err) {
+        // Optionally handle error
+        console.error('Polling meeting update failed:', err);
+      }
+    }, 10000); // 10 seconds
+    return () => clearInterval(interval);
+  }, [meeting?.id, meeting?.status]);
+
   // Fetch video URL when the Video tab is selected
   useEffect(() => {
     const fetchVideo = async () => {
@@ -219,6 +237,19 @@ export const MeetingDetails: React.FC = () => {
   // Analyze Meeting
   const handleAnalyzeMeeting = async () => {
     if (!meeting) return;
+    
+    // First try to get the transcript if we don't have it and meeting has bot_id
+    if (!transcriptData && meeting.bot_id) {
+      try {
+        const transcriptResponse = await ApiService.getMeetingOutput(meeting.bot_id);
+        setTranscriptData(transcriptResponse);
+        const key = `transcriptData_${meeting.id}`;
+        sessionStorage.setItem(key, JSON.stringify(transcriptResponse));
+      } catch (error) {
+        console.error('Failed to fetch transcript before analysis:', error);
+      }
+    }
+    
     try {
       setIsAnalyzing(true);
       const res = await ApiService.analyzeMeeting(meeting.id);
@@ -490,7 +521,7 @@ export const MeetingDetails: React.FC = () => {
                       <Copy className="h-4 w-4 mr-2" />
                       Copy Summary
                     </Button>
-                    {meeting.status === 'completed' && (!meeting.summary || meeting.summary.length === 0) && (
+                    {(meeting.status === 'completed' || meeting.status === 'in_call_recording') && (!meeting.summary || meeting.summary.length === 0) && (
                       <Button onClick={handleAnalyzeMeeting} isLoading={isAnalyzing} leftIcon={isAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}>
                         {isAnalyzing ? 'Generating…' : 'Generate Summary'}
                       </Button>
@@ -557,8 +588,50 @@ export const MeetingDetails: React.FC = () => {
 
             {activeTab === 'ai-insights' && (
               <div className="space-y-6 relative isolate">
-                {meeting.status === 'completed' ? (
+                {(meeting.status === 'completed' || meeting.status === 'in_call_recording') ? (
                   <div className="space-y-6 w-full">
+                    {/* Live Recording Notice */}
+                    {meeting.status === 'in_call_recording' && (
+                      <div className="bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4 mb-6">
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className="relative">
+                            <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse"></div>
+                            <div className="absolute inset-0 w-3 h-3 bg-blue-500 rounded-full animate-ping opacity-75"></div>
+                          </div>
+                          <h4 className="font-semibold text-blue-900 dark:text-blue-100">
+                            Live Meeting Analysis
+                          </h4>
+                        </div>
+                        <p className="text-sm text-blue-800 dark:text-blue-200">
+                          <Bot className="inline h-4 w-4 mr-1" />
+                          This meeting is currently being recorded. AI insights are generated in real-time as the conversation progresses.
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* Refresh Analysis for Completed Meetings */}
+                    {meeting.status === 'completed' && (!meeting.summary || actionItems.length === 0) && (
+                      <div className="bg-gradient-to-r from-yellow-50 to-yellow-100 dark:from-yellow-900/20 dark:to-yellow-800/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4 mb-6">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="font-semibold text-yellow-900 dark:text-yellow-100 mb-1">
+                              AI Analysis Incomplete
+                            </h4>
+                            <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                              Some AI insights may not have been generated yet. Click to refresh the analysis.
+                            </p>
+                          </div>
+                          <Button 
+                            onClick={handleAnalyzeMeeting} 
+                            isLoading={isAnalyzing} 
+                            size="sm"
+                            leftIcon={isAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                          >
+                            {isAnalyzing ? 'Analyzing...' : 'Refresh Analysis'}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     {/* Action Items Collapsible Section */}
                     <div className="relative">
                       <CollapsibleSection
@@ -569,11 +642,11 @@ export const MeetingDetails: React.FC = () => {
                         badge={actionItems.filter(item => item.status === 'pending').length}
                         badgeColor="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300"
                       >
-                        {meeting.status === 'completed' && actionItems.length === 0 && (
-                          <Button onClick={handleGenerateActionItems} isLoading={isGeneratingActionItems} leftIcon={isGeneratingActionItems ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}>
-                            {isGeneratingActionItems ? 'Generating…' : 'Generate Action Items'}
-                          </Button>
-                        )}
+                    {(meeting.status === 'completed' || meeting.status === 'in_call_recording') && actionItems.length === 0 && (
+                      <Button onClick={handleGenerateActionItems} isLoading={isGeneratingActionItems} leftIcon={isGeneratingActionItems ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}>
+                        {isGeneratingActionItems ? 'Generating…' : 'Generate Action Items'}
+                      </Button>
+                    )}
                         <ProfessionalActionItems
                           meetingId={meeting.id}
                           meetingTitle={meeting.title}

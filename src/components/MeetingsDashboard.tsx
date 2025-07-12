@@ -54,6 +54,12 @@ export const MeetingsDashboard: React.FC<MeetingsDashboardProps> = ({
         console.error('Error parsing meeting context:', error);
       }
     }
+
+    // --- Add polling for meetings list ---
+    const interval = setInterval(() => {
+      loadMeetings();
+    }, 10000); // 10 seconds
+    return () => clearInterval(interval);
   }, [user?.id]);
 
   const loadMeetings = async () => {

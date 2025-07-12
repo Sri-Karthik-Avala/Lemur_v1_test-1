@@ -107,6 +107,7 @@ export interface InsightItem {
 export type MeetingStatus = 
   | 'scheduled' 
   | 'in_progress' 
+  | 'in_call_recording'
   | 'completed' 
   | 'cancelled' 
   | 'processing'

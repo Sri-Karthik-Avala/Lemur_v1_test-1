@@ -7,7 +7,7 @@
  * @meta Helmet: <title>Meetings | Lemur AI</title> <meta name="description" content="Enhanced meetings page with calendar, upcoming/previous meetings, and metadata." />
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Calendar as CalendarIcon, List, Grid, Plus, Users, Video, FileText, ArrowRight, ArrowLeft, PlayCircle, BookOpen, StickyNote, Bot, Video as VideoIcon, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -17,7 +17,7 @@ import { JoinMeetingModal } from '../components/JoinMeetingModal';
 import { cn } from '../utils/cn';
 import { Calendar } from '../components/Calendar';
 // Static demo data removed – everything comes from backend
-import { Meeting } from '../types';
+import { Meeting, ActionItem } from '../types';
 import { ApiService } from '../services/api';
 import { useToastStore } from '../stores/toastStore';
 import { useAuthStore } from '../stores/authStore';
@@ -44,6 +44,8 @@ export const Meetings: React.FC = () => {
   const [isJoinMeetingModalOpen, setIsJoinMeetingModalOpen] = useState(false);
   const [loadingTranscripts, setLoadingTranscripts] = useState<Record<string, boolean>>({});
   const [allMeetings, setAllMeetings] = useState<Meeting[]>([]);
+  const processedMeetings = useRef<Set<string>>(new Set());
+  const retryAttempts = useRef<Map<string, number>>(new Map());
 
   // Fetch meetings from backend on component mount
   useEffect(() => {
@@ -89,7 +91,6 @@ export const Meetings: React.FC = () => {
             bot_id: m["Bot id"],
             actionItems: [],
             tags: [],
-            botStatus: statusRaw, // Store original bot status for reference
           } as Meeting;
         });
 
@@ -103,74 +104,163 @@ export const Meetings: React.FC = () => {
     fetchBackendMeetings();
   }, []);
 
-  // Simulate meeting completion after some time (for demo purposes)
-  useEffect(() => {
-    const checkMeetingCompletion = () => {
-      const now = new Date();
-      const updatedMeetings = allMeetings.map(meeting => {
-        // Check if meeting should be completed (for demo, complete after 2 minutes)
-        const meetingStart = new Date(`${meeting.date}T${meeting.startTime}`);
-        const timeDiff = now.getTime() - meetingStart.getTime();
-        
-        if (timeDiff > 120000 && (meeting.status === 'in_progress' || meeting.status === 'in_call_recording')) { // 2 minutes
-          const completedMeeting = {
-            ...meeting,
-            status: 'completed' as const,
-            summary: `**AI-Generated Summary for ${meeting.title}**\n\nThis meeting was successfully recorded and analyzed by Lemur AI. The bot joined the meeting and captured all audio and video content for transcription and analysis.\n\n**Key Points:**\n• Meeting was recorded successfully\n• Participants were engaged throughout\n• AI analysis is now available\n• Transcription has been processed\n\n**Next Steps:**\n• Review the full transcript\n• Check generated action items\n• Share insights with team members`
-          };
-          return completedMeeting;
-        }
-        return meeting;
-      });
-
-      // Check if any meetings were completed
-      const newlyCompleted = updatedMeetings.filter((meeting, index) => 
-        meeting.status === 'completed' && (allMeetings[index]?.status === 'in_progress' || allMeetings[index]?.status === 'in_call_recording')
-      );
-
-      if (newlyCompleted.length > 0) {
-        setAllMeetings(updatedMeetings);
-        
-        // Show notification for completed meetings
-        newlyCompleted.forEach(meeting => {
-          success('Meeting Completed', `"${meeting.title}" has ended. AI analysis is now available.`);
-        });
-      }
-    };
-
-    const interval = setInterval(checkMeetingCompletion, 10000); // Check every 10 seconds
-    return () => clearInterval(interval);
-  }, [allMeetings, success]);
-
-  // Auto-fetch meeting output for completed meetings missing summary/transcript
-  useEffect(() => {
-    const completedMeetings = allMeetings.filter(m => m.status === 'completed');
-    completedMeetings.forEach(meeting => {
-      if (meeting.bot_id && !meeting.summary && !meeting.transcript) {
-        ApiService.getMeetingOutput(meeting.bot_id)
-          .then(output => {
-            // Optionally update meeting in your store/state with output.summary, output.transcript, etc.
-            // This is a placeholder; you may want to update your dataStore or local state
-            // Example: setAllMeetings(prev => prev.map(m => m.id === meeting.id ? { ...m, ...output } : m));
-          })
-          .catch(() => {});
-      }
-    });
-  }, [allMeetings]);
-
-  // Categorize meetings based on status
+  // Categorize meetings based on status (must be before useEffects that use these variables)
   const recordingMeetings = allMeetings.filter(m => m.status === 'in_call_recording');
   const activeMeetings = allMeetings.filter(m => m.status === 'in_progress');
+  // Combine both recording and in_progress meetings as "ongoing"
+  const ongoingMeetings = [...recordingMeetings, ...activeMeetings];
   const upcomingMeetings = allMeetings.filter(m => m.status === 'scheduled');
   const completedMeetings = allMeetings.filter(m => ['completed', 'done', 'call_ended', 'media_expired', 'finished'].includes(String(m.status)));
   const failedMeetings = allMeetings.filter(m => m.status === 'failed');
   const unknownMeetings = allMeetings.filter(m => !['in_call_recording', 'in_progress', 'scheduled', 'completed', 'done', 'call_ended', 'media_expired', 'finished', 'failed'].includes(String(m.status)));
+
+  // Meeting completion is now handled by the backend status updates
+  // We'll only move meetings to completed when the backend reports they're done
+  
+  // Periodic polling for ongoing meetings to update status and trigger AI analysis
+  useEffect(() => {
+    if (ongoingMeetings.length === 0) return;
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        // Refresh meeting data from backend
+        const raw = await ApiService.getMyMeetings();
+        const mapped: Meeting[] = (raw || []).map((m: any) => {
+          const statusRaw = (m["Meeting status"] || '').toLowerCase();
+          
+          // Enhanced status mapping to handle bot states
+          let status: any;
+          
+          // Handle bot recording states
+          if (['bot.in_call_recording', 'in_call_recording'].includes(statusRaw)) {
+            status = 'in_call_recording';
+          } else if (['bot.joining_call', 'bot.in_waiting_room', 'bot.in_call_not_recording', 'bot.recording_permission_allowed'].includes(statusRaw)) {
+            status = 'in_progress';
+          } else if (['in_waiting_room', 'in_progress', 'joining', 'waiting', 'call_started'].includes(statusRaw)) {
+            status = 'in_progress';
+          } else if (['bot.call_ended', 'bot.done', 'done', 'call_ended', 'media_expired', 'completed', 'finished'].includes(statusRaw)) {
+            status = 'completed';
+          } else if (['bot.fatal', 'bot.recording_permission_denied'].includes(statusRaw)) {
+            status = 'failed';
+          } else {
+            status = statusRaw || 'unknown';
+          }
+
+          return {
+            id: String(m.id),
+            title: m["Meeting title"] || 'Untitled Meeting',
+            description: status === 'in_call_recording' ? 'Bot is currently recording the meeting.' : 
+                        status === 'in_progress' ? 'Meeting is currently in progress.' : '',
+            meetingLink: '',
+            date: m["Date"],
+            startTime: (m["Time start"] || '').substring(0,5) || '00:00',
+            endTime: (m["Time end"] || '').substring(0,5) || '00:00',
+            attendees: [],
+            status: status,
+            platform: 'meet',
+            clientId: m["Client id"] ? String(m["Client id"]) : undefined,
+            meetingType: m["External meeting"] ? 'external' : 'internal',
+            bot_id: m["Bot id"],
+            actionItems: [],
+            tags: [],
+          } as Meeting;
+        });
+        
+        setAllMeetings(mapped);
+      } catch (err) {
+        console.error('Failed to poll meeting updates:', err);
+      }
+    }, 15000); // Poll every 15 seconds
+    
+    return () => clearInterval(pollInterval);
+  }, [ongoingMeetings.length]);
+
+  // Efficiently trigger getMeetingOutput for overdue in-progress meetings and then analyzeMeeting for AI insights
+  useEffect(() => {
+    const now = new Date();
+    allMeetings.forEach(meeting => {
+      const meetingEnd = new Date(`${meeting.date}T${meeting.endTime}`);
+      const meetingStart = new Date(`${meeting.date}T${meeting.startTime}`);
+      // Check if meeting should be processed (ended or actively recording for >2min, or unknown status)
+      const shouldProcessMeeting = (
+        // Case 1: Meeting has ended (overdue meetings)
+        (['in_progress', 'in_call_recording', 'unknown'].includes(String(meeting.status)) && meetingEnd < now)
+      ) || (
+        // Case 2: Meeting is actively recording and has been going for at least 2 minutes
+        meeting.status === 'in_call_recording' &&
+        meetingStart < now &&
+        (now.getTime() - meetingStart.getTime()) > 2 * 60 * 1000 // 2 minutes
+      ) || (
+        // Case 3: Unknown meetings - always try to process if they have a bot_id
+        meeting.status === 'unknown' && meeting.bot_id
+      );
+      
+      if (
+        shouldProcessMeeting &&
+        meeting.bot_id &&
+        !processedMeetings.current.has(meeting.id)
+      ) {
+        processedMeetings.current.add(meeting.id);
+        ApiService.getMeetingOutput(meeting.bot_id)
+          .then((transcriptData) => {
+            // Check if we have actual transcript content before proceeding with analysis
+            if (transcriptData && (transcriptData.transcript || transcriptData.raw_transcript)) {
+              // After transcript is fetched, immediately fetch AI insights
+              ApiService.analyzeMeeting(meeting.id)
+                .then(res => {
+                  setAllMeetings(prev => prev.map(m => {
+                    if (m.id !== meeting.id) return m;
+                    let newActionItems = m.actionItems;
+                    if (Array.isArray(res.insights?.action_items) && res.insights?.action_items.length > 0) {
+                      if (typeof res.insights.action_items[0] === 'object') {
+                        newActionItems = res.insights.action_items as ActionItem[];
+                      } else if (typeof res.insights.action_items[0] === 'string') {
+                        newActionItems = res.insights.action_items.map((content: string) => ({
+                          id: crypto.randomUUID(),
+                          content,
+                          status: 'pending',
+                          priority: 'medium'
+                        })) as unknown as ActionItem[];
+                      }
+                    }
+                    return {
+                      ...m,
+                      summary: res.insights?.summary ?? m.summary,
+                      actionItems: newActionItems
+                    };
+                  }));
+                })
+                .catch(() => {});
+            } else {
+              // No transcript available yet, remove from processed set to retry later
+              // But only if we haven't tried too many times
+              const attempts = retryAttempts.current.get(meeting.id) || 0;
+              if (attempts < 3) {
+                processedMeetings.current.delete(meeting.id);
+                retryAttempts.current.set(meeting.id, attempts + 1);
+              }
+            }
+          })
+          .catch(() => {
+            // Optionally remove from set on error to retry later, but limit attempts
+            const attempts = retryAttempts.current.get(meeting.id) || 0;
+            if (attempts < 3) {
+              processedMeetings.current.delete(meeting.id);
+              retryAttempts.current.set(meeting.id, attempts + 1);
+            }
+          });
+      }
+    });
+  }, [allMeetings]);
+
+  // Meeting categorization moved earlier in the file
 
   // Debug: Log meetings data
   console.log('🔍 Meetings Page Debug:', {
     totalMeetings: allMeetings.length,
     recordingMeetings: recordingMeetings.length,
     activeMeetings: activeMeetings.length,
+    ongoingMeetings: ongoingMeetings.length,
     upcomingMeetings: upcomingMeetings.length,
     completedMeetings: completedMeetings.length,
     failedMeetings: failedMeetings.length,
@@ -292,89 +382,11 @@ export const Meetings: React.FC = () => {
     }
   };
 
-  // Banner for ongoing meetings that are being recorded
-  const ongoingMeetingsBanner = recordingMeetings.length > 0 && (
-    <motion.div
-      initial={{ opacity: 0, y: -20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className="mb-6 p-4 bg-gradient-to-r from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20 border border-red-200 dark:border-red-700 rounded-lg shadow-sm"
-    >
-      <div className="flex items-center gap-3 mb-3">
-        <div className="relative">
-          <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-          <div className="absolute inset-0 w-3 h-3 bg-red-500 rounded-full animate-ping opacity-75"></div>
-        </div>
-        <div className="font-semibold text-red-900 dark:text-red-100 text-lg">
-          Ongoing Meetings - Recording in Progress
-        </div>
-        <div className="ml-auto bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200 px-3 py-1 rounded-full text-sm font-medium">
-          {recordingMeetings.length} meeting{recordingMeetings.length > 1 ? 's' : ''}
-        </div>
-      </div>
-      
-      <div className="text-sm text-red-800 dark:text-red-200 mb-4">
-        <Bot className="inline h-4 w-4 mr-1" />
-        Lemur AI bots are currently recording {recordingMeetings.length} meeting{recordingMeetings.length > 1 ? 's' : ''}. 
-        Transcripts and analysis will be available once the meeting{recordingMeetings.length > 1 ? 's' : ''} conclude{recordingMeetings.length === 1 ? 's' : ''}.
-      </div>
+  // Banner for ongoing meetings that are being recorded - REMOVED
+  const ongoingMeetingsBanner = null; // Removed the banner component
 
-      {/* Recording Meetings List */}
-      <div className="flex flex-col gap-3">
-        {recordingMeetings.map((meeting) => (
-          <div
-            key={meeting.id}
-            className="rounded-lg bg-white dark:bg-gray-900 shadow-sm border border-red-200 dark:border-red-700 p-4 flex items-center gap-4 transition-all duration-200 cursor-pointer hover:scale-[1.01] hover:shadow-md"
-            onClick={() => handleMeetingClick(meeting)}
-          >
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <Video className="h-8 w-8 text-red-500" />
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-              </div>
-            </div>
-            
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-base mb-1 text-gray-900 dark:text-white">
-                {meeting.title}
-              </div>
-              <div className="text-sm text-gray-600 dark:text-gray-300 mb-1">
-                {formatMeetingTime(meeting)}
-              </div>
-              <div className="flex items-center gap-2 mb-2">
-                <div className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-2 py-1 rounded-full text-xs font-medium">
-                  Recording
-                </div>
-                <div className={cn(
-                  "px-2 py-1 rounded-full text-xs font-medium",
-                  meeting.meetingType === 'external' 
-                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" 
-                    : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                )}>
-                  {meeting.meetingType}
-                </div>
-              </div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                Meeting ID: <span className="font-mono">{meeting.id}</span>
-                {meeting.bot_id && (
-                  <span className="ml-3">
-                    Bot ID: <span className="font-mono">{meeting.bot_id}</span>
-                  </span>
-                )}
-              </div>
-              <div className="text-xs text-red-600 dark:text-red-400 font-medium">
-                {getBotStatusDescription(meeting.botStatus || meeting.status)}
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <ArrowRight className="h-5 w-5 text-gray-400" />
-            </div>
-          </div>
-        ))}
-      </div>
-    </motion.div>
-  );
+  // Recording Meetings List (standalone, not in banner) - REMOVED since it's not used
+  // This was causing JSX syntax errors
 
   // --- UI ---
   return (
@@ -382,8 +394,7 @@ export const Meetings: React.FC = () => {
       {/* Helmet: <title>Meetings | Lemur AI</title> <meta name="description" content="Enhanced meetings page with calendar, upcoming/previous meetings, and metadata." /> */}
       <Navbar />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {/* Ongoing Meetings Banner */}
-        {ongoingMeetingsBanner}
+        {/* Ongoing Meetings Banner - REMOVED */}
         
         <motion.div
           initial={{ opacity: 0, y: 30 }}
@@ -442,7 +453,7 @@ export const Meetings: React.FC = () => {
                         Status: {meeting.status.replace('_', ' ')}
                       </div>
                       <div className="text-xs text-gray-500 dark:text-gray-400">
-                        {getBotStatusDescription(meeting.botStatus || meeting.status)}
+                        {getBotStatusDescription(meeting.status)}
                       </div>
                     </div>
                   </div>
@@ -480,7 +491,7 @@ export const Meetings: React.FC = () => {
                         {formatMeetingTime(meeting)}
                       </div>
                       <div className="text-xs text-red-600 dark:text-red-400 font-medium">
-                        {getBotStatusDescription(meeting.botStatus || meeting.status)}
+                        {getBotStatusDescription(meeting.status)}
                       </div>
                     </div>
                   </div>
@@ -580,9 +591,96 @@ export const Meetings: React.FC = () => {
                 </div>
               </div>
               
+              {/* Ongoing Meetings */}
+              {ongoingMeetings.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-4">
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
+                      Ongoing Meetings
+                    </h3>
+                    <div className="relative">
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                      <div className="absolute inset-0 w-2 h-2 bg-red-500 rounded-full animate-ping opacity-75"></div>
+                    </div>
+                    <span className="text-sm text-gray-500 dark:text-gray-400 ml-auto">
+                      {ongoingMeetings.length} meetings
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    {ongoingMeetings.map(meeting => {
+                      const statusInfo = getStatusInfo(meeting.status);
+                      return (
+                        <div 
+                          key={meeting.id} 
+                          className="rounded-lg bg-white dark:bg-gray-900 shadow-sm hover:shadow-md border-[0.25px] border-gray-200 dark:border-gray-800 p-4 transition-all duration-200"
+                        >
+                          <div className="flex items-start gap-4">
+                            <div 
+                              className="flex-1 min-w-0 cursor-pointer"
+                              onClick={() => handleMeetingClick(meeting)}
+                            >
+                              <div className="font-semibold text-base mb-1 text-gray-900 dark:text-white">
+                                {meeting.title}
+                              </div>
+                              <div className="text-sm text-gray-600 dark:text-gray-300 mb-1">
+                                {formatMeetingTime(meeting)}
+                              </div>
+                              <div className="mb-2">
+                                <div className={cn("inline-block px-2 py-1 rounded-full text-xs font-medium", statusInfo.color)}>
+                                  {statusInfo.label}
+                                </div>
+                              </div>
+                              {meeting.summary && (
+                                <div className="text-xs text-gray-600 dark:text-gray-300 mb-2 line-clamp-2">
+                                  <strong>Summary:</strong> {meeting.summary.substring(0, 150)}...
+                                </div>
+                              )}
+                              {meeting.actionItems && meeting.actionItems.length > 0 && (
+                                <div className="text-xs text-blue-600 dark:text-blue-400">
+                                  {meeting.actionItems.length} action item(s) assigned
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* AI Analysis Section */}
+                            {meeting.bot_id && (
+                              <div className="flex flex-col gap-2 shrink-0">
+                                <div className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
+                                  <Bot className="h-3 w-3" />
+                                  <span>AI Analysis</span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => handleGetTranscript(meeting)}
+                                    isLoading={loadingTranscripts[meeting.id]}
+                                    leftIcon={<FileText className="h-3 w-3 text-purple-500" />}
+                                    className="text-xs py-1 px-2"
+                                  >
+                                    Transcript
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => handleGetVideo(meeting)}
+                                    leftIcon={<VideoIcon className="h-3 w-3 text-blue-500" />}
+                                    className="text-xs py-1 px-2"
+                                  >
+                                    Video
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Previous Meetings */}
-              
-            
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
@@ -671,7 +769,7 @@ export const Meetings: React.FC = () => {
                 <div>
                   <div className="flex items-center gap-2 mb-4">
                     <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
-                      Ongoing or Unknown Meetings
+                      Unknown Meetings
                     </h3>
                     <StickyNote className="h-5 w-5 text-yellow-500 dark:text-yellow-400" />
                     <span className="text-sm text-gray-500 dark:text-gray-400 ml-auto">
@@ -684,40 +782,75 @@ export const Meetings: React.FC = () => {
                       return (
                         <div 
                           key={meeting.id} 
-                          className="rounded-lg bg-white dark:bg-gray-900 shadow-sm hover:shadow-md border-[0.25px] border-gray-200 dark:border-gray-800 p-4 flex items-center gap-4 transition-all duration-200 cursor-pointer hover:scale-[1.01]"
-                          onClick={() => handleMeetingClick(meeting)}
+                          className="rounded-lg bg-white dark:bg-gray-900 shadow-sm hover:shadow-md border-[0.25px] border-gray-200 dark:border-gray-800 p-4 transition-all duration-200"
                         >
-                          <div className="flex-1 min-w-0">
-                            <div className="font-semibold text-base mb-1 text-gray-900 dark:text-white">
-                              {meeting.title}
-                            </div>
-                            <div className="text-sm text-gray-600 dark:text-gray-300 mb-1">
-                              {formatMeetingTime(meeting)}
-                            </div>
-                            <div className="mb-2">
-                              <div className={cn("inline-block px-2 py-1 rounded-full text-xs font-medium", statusInfo.color)}>
-                                {statusInfo.label}
+                          <div className="flex items-start gap-4">
+                            <div 
+                              className="flex-1 min-w-0 cursor-pointer"
+                              onClick={() => handleMeetingClick(meeting)}
+                            >
+                              <div className="font-semibold text-base mb-1 text-gray-900 dark:text-white">
+                                {meeting.title}
                               </div>
+                              <div className="text-sm text-gray-600 dark:text-gray-300 mb-1">
+                                {formatMeetingTime(meeting)}
+                              </div>
+                              <div className="mb-2">
+                                <div className={cn("inline-block px-2 py-1 rounded-full text-xs font-medium", statusInfo.color)}>
+                                  {statusInfo.label}
+                                </div>
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                                Platform: {meeting.platform?.toUpperCase() || 'N/A'}
+                              </div>
+                              {meeting.description && (
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 line-clamp-2">
+                                  {meeting.description}
+                                </div>
+                              )}
+                              {/* SUMMARY AND ACTION ITEMS - PROPERLY POSITIONED */}
+                              {meeting.summary && (
+                                <div className="text-xs text-gray-600 dark:text-gray-300 mb-2 line-clamp-2 mt-2">
+                                  <strong>Summary:</strong> {meeting.summary.substring(0, 150)}...
+                                </div>
+                              )}
+                              {meeting.actionItems && meeting.actionItems.length > 0 && (
+                                <div className="text-xs text-blue-600 dark:text-blue-400">
+                                  {meeting.actionItems.length} action item(s) assigned
+                                </div>
+                              )}
                             </div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                              Platform: {meeting.platform?.toUpperCase() || 'N/A'}
-                            </div>
-                            {meeting.description && (
-                              <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 line-clamp-2">
-                                {meeting.description}
+                            
+                            {/* AI ANALYSIS SECTION - MOVED TO SEPARATE COLUMN */}
+                            {meeting.bot_id && (
+                              <div className="flex flex-col gap-2 shrink-0">
+                                <div className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
+                                  <Bot className="h-3 w-3" />
+                                  <span>AI Analysis</span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => handleGetTranscript(meeting)}
+                                    isLoading={loadingTranscripts[meeting.id]}
+                                    leftIcon={<FileText className="h-3 w-3 text-purple-500" />}
+                                    className="text-xs py-1 px-2"
+                                  >
+                                    Transcript
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => handleGetVideo(meeting)}
+                                    leftIcon={<VideoIcon className="h-3 w-3 text-blue-500" />}
+                                    className="text-xs py-1 px-2"
+                                  >
+                                    Video
+                                  </Button>
+                                </div>
                               </div>
                             )}
-                          </div>
-                          <div className="flex flex-col items-center gap-2">
-                            <div className={cn(
-                              "px-2 py-1 rounded-full text-xs font-medium",
-                              meeting.meetingType === 'external' 
-                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" 
-                                : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                            )}>
-                              {meeting.meetingType}
-                            </div>
-                            <PlayCircle className="h-7 w-7 text-yellow-500 dark:text-yellow-400 hover:scale-110 transition-transform" />
                           </div>
                         </div>
                       );
@@ -725,6 +858,11 @@ export const Meetings: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              
+
+              
+              
             </div>
           </div>
         </motion.div>
