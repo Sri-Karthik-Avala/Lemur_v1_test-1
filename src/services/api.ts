@@ -343,6 +343,7 @@ export interface MeetingOutputResponse {
   meeting_title?: string;
   transcript?: string; // Stitched together readable text
   raw_transcript?: TranscriptSegment[]; // Original structured data
+  transcript_data?: TranscriptSegment[]; // Raw transcript segments
   summary?: string;
   action_items?: string;
   participants?: string[];

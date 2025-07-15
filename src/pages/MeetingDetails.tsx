@@ -185,11 +185,21 @@ export const MeetingDetails: React.FC = () => {
       import('../services/api').then(({ ApiService }) => {
         ApiService.getMeetingOutput(meeting.bot_id as string)
           .then((data) => {
-            setTranscriptData(data);
-            sessionStorage.setItem(key, JSON.stringify(data));
+            // Transform the API response to match our expected format
+            const processedData = {
+              ...data,
+              transcript: data.transcript_data?.map(segment => 
+                `${segment.participant.name}: ${segment.words.map(word => word.text).join(' ')}`
+              ).join('\n\n') || '',
+              raw_transcript: data.transcript_data || []
+            };
+            
+            setTranscriptData(processedData);
+            sessionStorage.setItem(key, JSON.stringify(processedData));
           })
           .catch((err) => {
             console.error('Error fetching transcript:', err);
+            showErrorToast('Error Loading Transcript', 'Failed to load meeting transcript');
           });
       });
     }
