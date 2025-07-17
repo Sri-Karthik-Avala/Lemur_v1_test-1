@@ -20,7 +20,8 @@ export const useAuthStore = create<AuthState & {
     (set, get) => ({
       user: null,
       isAuthenticated: false,
-      isLoading: false,
+      // Start in loading state until initializeAuth runs to avoid premature redirects
+      isLoading: true,
       error: null,
 
       login: async (email: string, password: string) => {
