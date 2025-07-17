@@ -79,6 +79,9 @@ export interface Client {
   created_at: string;
   updated_at: string;
   is_active: boolean;
+  industry?: string;
+  contact_email?: string;
+  contact_name?: string;
 }
 
 export interface SubClient {
@@ -352,11 +355,31 @@ export interface MeetingOutputResponse {
   status: string;
 }
 
+
 export interface VideoUrlResponse {
   bot_id: string;
   video_url: string;
   expires_at?: string;
   status: string;
+}
+
+export interface ApiMeeting {
+  id: number;
+  "Meeting title": string;
+  Date: string;
+  "Time start": string;
+  "Time end": string | null;
+  "User id": number;
+  "Client id": number;
+  "Bot id": string;
+  "Meeting status": string;
+  "External meeting": boolean;
+}
+
+export interface ApiMeetingsResponse {
+  client_name: string;
+  meetings: ApiMeeting[];
+  total_meetings: number;
 }
 
 // API Service Class
@@ -410,6 +433,23 @@ export class ApiService {
     const response = await api.get('/clients/');
     return response.data;
   }
+  /*
+  * Fetches meetings for a specific client
+  * @param clientId - ID of the client to fetch meetings for
+  * @returns Promise containing client name, meetings array, and total count
+  */
+ static async getClientMeetings(clientId: string): Promise<ApiMeetingsResponse> {
+   try {
+     const response = await api.get(`/client/${clientId}/meetings`);
+     return response.data;
+   } catch (error) {
+     console.error(`Error fetching meetings for client ${clientId}:`, error);
+     throw error;
+   }
+ }
+
+
+
 
   static async getClient(clientId: string): Promise<Client> {
     const response = await api.get(`/clients/${clientId}`);
@@ -788,6 +828,37 @@ export class ApiService {
   // Get My Clients - Get dropdown list of all accessible clients
   static async getMyClients(): Promise<MyClientsResponse> {
     const response = await api.get('/my-clients');
+    return response.data;
+  }
+
+  // Upload Document - Attach files to a specific client
+  static async uploadClientDocument(clientId: string, file: File): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await api.post(`/client/${clientId}/upload-document`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  }
+
+  // Get Client Documents - List all documents and transcripts for a client
+  static async getClientDocuments(clientId: string): Promise<any> {
+    const response = await api.get(`/client/${clientId}/documents`);
+    return response.data;
+  }
+
+  // Download Document - Generate a signed download URL (valid for 1 hour)
+  static async getDocumentDownloadUrl(documentId: string): Promise<any> {
+    const response = await api.get(`/download-document/${documentId}`);
+    return response.data;
+  }
+
+  // Delete Document - Permanently remove a document from storage and database
+  static async deleteDocument(documentId: string): Promise<any> {
+    const response = await api.delete(`/delete-document/${documentId}`);
     return response.data;
   }
 

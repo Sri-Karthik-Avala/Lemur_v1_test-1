@@ -16,117 +16,94 @@ import { motion } from 'framer-motion';
 import { Navbar } from '../components/Navbar';
 import { Button } from '../components/Button';
 import { cn } from '../utils/cn';
-import { getMeetingsByClientId } from '../data/meetings';
-import { Meeting } from '../types';
+import { ApiService } from '../services/api'; // Adjust import path as needed
 
-// Mock client data - matching the structure from Clients.tsx
-interface MockClient {
-  id: string;
-  name: string;
-  description?: string;
-  created_at: string;
-  updated_at: string;
-  industry?: string;
-  contact_email?: string;
-  contact_name?: string;
+// API Meeting interface matching your backend response
+interface ApiMeeting {
+  id: number;
+  "Meeting title": string;
+  Date: string;
+  "Time start": string;
+  "Time end": string | null;
+  "User id": number;
+  "Client id": number;
+  "Bot id": string;
+  "Meeting status": string;
+  "External meeting": boolean;
 }
 
-const mockClientsData: MockClient[] = [
-  {
-    id: 'client-1',
-    name: 'TechCorp Industries',
-    description: 'Leading technology company specializing in cloud infrastructure and AI solutions',
-    created_at: '2024-01-15T10:30:00Z',
-    updated_at: '2024-12-08T14:22:00Z',
-    industry: 'Technology',
-    contact_email: 'sarah.johnson@techcorp.com',
-    contact_name: 'Sarah Johnson'
-  },
-  {
-    id: 'client-2',
-    name: 'GreenEnergy Solutions',
-    description: 'Renewable energy company focused on solar and wind power installations',
-    created_at: '2024-02-20T08:15:00Z',
-    updated_at: '2024-12-07T16:45:00Z',
-    industry: 'Energy',
-    contact_email: 'mike.chen@greenenergy.com',
-    contact_name: 'Mike Chen'
-  },
-  {
-    id: 'client-3',
-    name: 'HealthFirst Medical',
-    description: 'Healthcare provider network with 50+ locations across the region',
-    created_at: '2024-03-10T11:20:00Z',
-    updated_at: '2024-12-06T09:30:00Z',
-    industry: 'Healthcare',
-    contact_email: 'dr.williams@healthfirst.com',
-    contact_name: 'Dr. Emily Williams'
-  },
-  {
-    id: 'client-4',
-    name: 'FinanceMax Group',
-    description: 'Investment banking and financial services company',
-    created_at: '2024-04-05T13:45:00Z',
-    updated_at: '2024-12-05T11:15:00Z',
-    industry: 'Finance',
-    contact_email: 'robert.clark@financemax.com',
-    contact_name: 'Robert Clark'
-  },
-  {
-    id: 'client-5',
-    name: 'EduTech Academy',
-    description: 'Online education platform providing professional certification courses',
-    created_at: '2024-05-12T09:00:00Z',
-    updated_at: '2024-12-04T15:20:00Z',
-    industry: 'Education',
-    contact_email: 'lisa.martinez@edutech.com',
-    contact_name: 'Lisa Martinez'
-  },
-  {
-    id: 'client-6',
-    name: 'RetailPlus Chain',
-    description: 'Multi-brand retail chain with e-commerce and physical stores',
-    created_at: '2024-06-18T14:30:00Z',
-    updated_at: '2024-12-03T12:40:00Z',
-    industry: 'Retail',
-    contact_email: 'james.wilson@retailplus.com',
-    contact_name: 'James Wilson'
-  }
-];
+interface ApiMeetingsResponse {
+  client_name: string;
+  meetings: ApiMeeting[];
+  total_meetings: number;
+}
+
+// Client interface based on API response
+interface Client {
+  id: string;
+  name: string;
+  total_meetings: number;
+}
 
 export const ClientDetail: React.FC = () => {
   const { clientId } = useParams<{ clientId: string }>();
   const navigate = useNavigate();
-  const [client, setClient] = useState<MockClient | null>(null);
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [client, setClient] = useState<Client | null>(null);
+  const [meetings, setMeetings] = useState<ApiMeeting[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'upcoming' | 'completed'>('upcoming');
 
+
+
   useEffect(() => {
-    if (!clientId) return;
+    const loadClientData = async () => {
+      if (!clientId) return;
 
-    // Find client
-    const foundClient = mockClientsData.find(c => c.id === clientId);
-    if (foundClient) {
-      setClient(foundClient);
-      document.title = `${foundClient.name} | Lemur AI`;
-    }
+      setLoading(true);
+      setError(null);
 
-    // Get meetings for this client
-    const clientMeetings = getMeetingsByClientId(clientId);
-    setMeetings(clientMeetings);
+      try {
+        const data = await ApiService.getClientMeetings(clientId);
+        
+        // Set client data from API response
+        setClient({
+          id: clientId,
+          name: data.client_name,
+          total_meetings: data.total_meetings
+        });
+
+        // Set meetings
+        setMeetings(data.meetings);
+
+        // Update document title
+        document.title = `${data.client_name} | Lemur AI`;
+
+      } catch (error) {
+        setError('Failed to load client data');
+        console.error('Error loading client data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadClientData();
   }, [clientId]);
 
   const handleGoBack = () => {
     navigate('/clients');
   };
 
-  const handleMeetingClick = (meetingId: string) => {
+  const handleMeetingClick = (meetingId: number) => {
     navigate(`/meetings/${meetingId}`);
   };
 
   const formatDateTime = (dateString: string, timeString: string) => {
-    const fullDateString = `${dateString}T${timeString}:00`;
+    // Handle the time format from API (e.g., "11:19:15+00")
+    const cleanTime = timeString.split('+')[0]; // Remove timezone part
+    const fullDateString = `${dateString}T${cleanTime}`;
     const date = new Date(fullDateString);
+    
     return {
       date: date.toLocaleDateString('en-US', { 
         weekday: 'long', 
@@ -142,30 +119,89 @@ export const ClientDetail: React.FC = () => {
     };
   };
 
-  const getDuration = (startTime: string, endTime: string) => {
-    const [startHours, startMinutes] = startTime.split(':').map(Number);
-    const [endHours, endMinutes] = endTime.split(':').map(Number);
+  const getDuration = (startTime: string, endTime: string | null) => {
+    if (!endTime) return 'Duration unknown';
+    
+    const cleanStartTime = startTime.split('+')[0];
+    const cleanEndTime = endTime.split('+')[0];
+    
+    const [startHours, startMinutes] = cleanStartTime.split(':').map(Number);
+    const [endHours, endMinutes] = cleanEndTime.split(':').map(Number);
+    
     const startTotalMinutes = startHours * 60 + startMinutes;
     const endTotalMinutes = endHours * 60 + endMinutes;
     const diffMins = endTotalMinutes - startTotalMinutes;
-    return `${diffMins} min`;
+    
+    return diffMins > 0 ? `${diffMins} min` : 'Duration unknown';
   };
 
   const getPlatformIcon = (platform: string) => {
     return <Video className="h-4 w-4" />;
   };
 
-  const upcomingMeetings = meetings.filter(m => m.status === 'scheduled');
-  const completedMeetings = meetings.filter(m => m.status === 'completed');
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'done':
+      case 'completed':
+        return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
+      case 'scheduled':
+      case 'upcoming':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+      case 'in-progress':
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300';
+      default:
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-300';
+    }
+  };
 
-  if (!client) {
+  const getStatusLabel = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'done':
+        return 'COMPLETED';
+      case 'scheduled':
+        return 'SCHEDULED';
+      case 'in-progress':
+        return 'IN PROGRESS';
+      default:
+        return status.toUpperCase();
+    }
+  };
+
+  // Filter meetings based on status
+  const upcomingMeetings = meetings.filter(m => 
+    m["Meeting status"].toLowerCase() === 'scheduled' || 
+    m["Meeting status"].toLowerCase() === 'in-progress'
+  );
+  
+  const completedMeetings = meetings.filter(m => 
+    m["Meeting status"].toLowerCase() === 'done' || 
+    m["Meeting status"].toLowerCase() === 'completed'
+  );
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-primary">
+        <Navbar />
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <div className="text-lg text-gray-600 dark:text-gray-400">
+              Loading client details...
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !client) {
     return (
       <div className="min-h-screen bg-primary">
         <Navbar />
         <div className="flex items-center justify-center min-h-[60vh]">
           <div className="text-center">
             <div className="text-lg text-gray-600 dark:text-gray-400 mb-4">
-              Client not found
+              {error || 'Client not found'}
             </div>
             <Button onClick={handleGoBack} variant="outline">
               Back to Clients
@@ -210,45 +246,9 @@ export const ClientDetail: React.FC = () => {
                       {client.name}
                     </h1>
                     <p className="text-lg mt-1" style={{ color: 'var(--text-secondary)' }}>
-                      {client.industry} • Client since {new Date(client.created_at).getFullYear()}
+                      Client ID: {client.id}
                     </p>
                   </div>
-                </div>
-
-                {client.description && (
-                  <p className="text-gray-700 dark:text-gray-300 leading-relaxed mb-6">
-                    {client.description}
-                  </p>
-                )}
-
-                {/* Contact Info */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {client.contact_name && (
-                    <div className="flex items-center gap-3">
-                      <Users className="h-5 w-5 text-gray-400" />
-                      <div>
-                        <div className="font-medium" style={{ color: 'var(--text-primary)' }}>
-                          {client.contact_name}
-                        </div>
-                        <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                          Primary Contact
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {client.contact_email && (
-                    <div className="flex items-center gap-3">
-                      <Mail className="h-5 w-5 text-gray-400" />
-                      <div>
-                        <div className="font-medium" style={{ color: 'var(--text-primary)' }}>
-                          {client.contact_email}
-                        </div>
-                        <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                          Email
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -261,7 +261,7 @@ export const ClientDetail: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600 dark:text-gray-400">Total Meetings</span>
                     <span className="font-semibold text-gray-900 dark:text-gray-100">
-                      {meetings.length}
+                      {client.total_meetings}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -312,7 +312,7 @@ export const ClientDetail: React.FC = () => {
                 {upcomingMeetings.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {upcomingMeetings.map(meeting => {
-                      const dateTime = formatDateTime(meeting.date, meeting.startTime);
+                      const dateTime = formatDateTime(meeting.Date, meeting["Time start"]);
                       return (
                         <motion.div
                           key={meeting.id}
@@ -322,26 +322,20 @@ export const ClientDetail: React.FC = () => {
                         >
                           <div className="flex items-start justify-between mb-4">
                             <div className="flex items-center gap-2">
-                              {getPlatformIcon(meeting.platform || 'other')}
+                              {getPlatformIcon('other')}
                               <span className={cn(
                                 'px-2 py-1 text-xs font-medium rounded-full',
-                                'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
+                                getStatusColor(meeting["Meeting status"])
                               )}>
-                                SCHEDULED
+                                {getStatusLabel(meeting["Meeting status"])}
                               </span>
                             </div>
                             <ArrowRight className="h-4 w-4 text-gray-400" />
                           </div>
 
                           <h3 className="font-semibold text-lg mb-2 line-clamp-2" style={{ color: 'var(--text-primary)' }}>
-                            {meeting.title}
+                            {meeting["Meeting title"]}
                           </h3>
-
-                          {meeting.description && (
-                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 line-clamp-2">
-                              {meeting.description}
-                            </p>
-                          )}
 
                           <div className="space-y-2 text-sm">
                             <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
@@ -350,11 +344,11 @@ export const ClientDetail: React.FC = () => {
                             </div>
                             <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                               <Clock className="h-4 w-4" />
-                              <span>{dateTime.time} • {getDuration(meeting.startTime, meeting.endTime)}</span>
+                              <span>{dateTime.time} • {getDuration(meeting["Time start"], meeting["Time end"])}</span>
                             </div>
                             <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                              <Users className="h-4 w-4" />
-                              <span>{meeting.attendees.length} attendees</span>
+                              <Video className="h-4 w-4" />
+                              <span>{meeting["External meeting"] ? 'External' : 'Internal'}</span>
                             </div>
                           </div>
                         </motion.div>
@@ -380,7 +374,7 @@ export const ClientDetail: React.FC = () => {
                 {completedMeetings.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {completedMeetings.map(meeting => {
-                      const dateTime = formatDateTime(meeting.date, meeting.startTime);
+                      const dateTime = formatDateTime(meeting.Date, meeting["Time start"]);
                       return (
                         <motion.div
                           key={meeting.id}
@@ -390,26 +384,20 @@ export const ClientDetail: React.FC = () => {
                         >
                           <div className="flex items-start justify-between mb-4">
                             <div className="flex items-center gap-2">
-                              {getPlatformIcon(meeting.platform || 'other')}
+                              {getPlatformIcon('other')}
                               <span className={cn(
                                 'px-2 py-1 text-xs font-medium rounded-full',
-                                'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                                getStatusColor(meeting["Meeting status"])
                               )}>
-                                COMPLETED
+                                {getStatusLabel(meeting["Meeting status"])}
                               </span>
                             </div>
                             <ArrowRight className="h-4 w-4 text-gray-400" />
                           </div>
 
                           <h3 className="font-semibold text-lg mb-2 line-clamp-2" style={{ color: 'var(--text-primary)' }}>
-                            {meeting.title}
+                            {meeting["Meeting title"]}
                           </h3>
-
-                          {meeting.description && (
-                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 line-clamp-2">
-                              {meeting.description}
-                            </p>
-                          )}
 
                           <div className="space-y-2 text-sm">
                             <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
@@ -418,18 +406,12 @@ export const ClientDetail: React.FC = () => {
                             </div>
                             <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                               <Clock className="h-4 w-4" />
-                              <span>{dateTime.time} • {getDuration(meeting.startTime, meeting.endTime)}</span>
+                              <span>{dateTime.time} • {getDuration(meeting["Time start"], meeting["Time end"])}</span>
                             </div>
                             <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                              <Users className="h-4 w-4" />
-                              <span>{meeting.attendees.length} attendees</span>
+                              <Video className="h-4 w-4" />
+                              <span>{meeting["External meeting"] ? 'External' : 'Internal'}</span>
                             </div>
-                            {meeting.actionItems && meeting.actionItems.length > 0 && (
-                              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                                <FileText className="h-4 w-4" />
-                                <span>{meeting.actionItems.length} action items</span>
-                              </div>
-                            )}
                           </div>
                         </motion.div>
                       );
@@ -453,4 +435,4 @@ export const ClientDetail: React.FC = () => {
       </main>
     </div>
   );
-}; 
+};
