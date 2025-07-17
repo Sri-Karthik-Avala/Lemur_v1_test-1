@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { HelmetProvider } from 'react-helmet-async';
 import { useThemeStore } from './stores/themeStore';
 import { useToastStore } from './stores/toastStore';
 import { useAuthStore } from './stores/authStore';
@@ -66,7 +67,8 @@ function App() {
   }, []);
 
   return (
-    <Router future={{ v7_relativeSplatPath: true }}>
+    <HelmetProvider>
+      <Router future={{ v7_relativeSplatPath: true }}>
       <Routes>
         {/* Public Routes */}
         <Route path="/" element={<LandingPage />} />
@@ -141,9 +143,10 @@ function App() {
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
 
-      {/* Toast Container */}
-      <ToastContainer toasts={toasts} onClose={removeToast} />
-    </Router>
+        {/* Toast Container */}
+        <ToastContainer toasts={toasts} onClose={removeToast} />
+      </Router>
+    </HelmetProvider>
   );
 }
 

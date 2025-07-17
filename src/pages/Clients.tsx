@@ -10,6 +10,8 @@ import { ClientModal } from '../components/ClientModal';
 import { Modal } from '../components/Modal';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { cn } from '../utils/cn';
+import { SEO } from '../components/SEO';
+import { seoConfigs } from '../utils/seoConfig';
 
 // Mock data types
 interface MockClient {
@@ -252,67 +254,6 @@ export const Clients: React.FC = () => {
 
   // Initialize mock data
   useEffect(() => {
-    // Set comprehensive page metadata
-    document.title = 'Client Management | Lemur AI - Intelligent Meeting Assistant';
-    
-    // Update meta description
-    const metaDescription = document.querySelector('meta[name="description"]');
-    if (metaDescription) {
-      metaDescription.setAttribute('content', 'Manage your client relationships, project history, and collaboration with Lemur AI\'s intelligent client management system. Track meetings, files, and insights.');
-    } else {
-      const meta = document.createElement('meta');
-      meta.name = 'description';
-      meta.content = 'Manage your client relationships, project history, and collaboration with Lemur AI\'s intelligent client management system. Track meetings, files, and insights.';
-      document.head.appendChild(meta);
-    }
-
-    // Update meta keywords
-    const metaKeywords = document.querySelector('meta[name="keywords"]');
-    if (metaKeywords) {
-      metaKeywords.setAttribute('content', 'client management, CRM, customer relationship, project tracking, AI assistant, meeting intelligence, Lemur AI');
-    } else {
-      const meta = document.createElement('meta');
-      meta.name = 'keywords';
-      meta.content = 'client management, CRM, customer relationship, project tracking, AI assistant, meeting intelligence, Lemur AI';
-      document.head.appendChild(meta);
-    }
-
-    // Open Graph metadata
-    const updateOrCreateOGMeta = (property: string, content: string) => {
-      let meta = document.querySelector(`meta[property="${property}"]`);
-      if (meta) {
-        meta.setAttribute('content', content);
-      } else {
-        meta = document.createElement('meta');
-        meta.setAttribute('property', property);
-        meta.setAttribute('content', content);
-        document.head.appendChild(meta);
-      }
-    };
-
-    updateOrCreateOGMeta('og:title', 'Client Management | Lemur AI');
-    updateOrCreateOGMeta('og:description', 'Intelligent client management system with AI-powered insights and meeting intelligence.');
-    updateOrCreateOGMeta('og:type', 'website');
-    updateOrCreateOGMeta('og:url', window.location.href);
-
-    // Twitter Card metadata
-    const updateOrCreateTwitterMeta = (name: string, content: string) => {
-      let meta = document.querySelector(`meta[name="${name}"]`);
-      if (meta) {
-        meta.setAttribute('content', content);
-      } else {
-        meta = document.createElement('meta');
-        meta.setAttribute('name', name);
-        meta.setAttribute('content', content);
-        document.head.appendChild(meta);
-      }
-    };
-
-    updateOrCreateTwitterMeta('twitter:card', 'summary_large_image');
-    updateOrCreateTwitterMeta('twitter:title', 'Client Management | Lemur AI');
-    updateOrCreateTwitterMeta('twitter:description', 'Intelligent client management system with AI-powered insights and meeting intelligence.');
-
-    // Initialize mock data
     initializeMockData();
   }, []);
 
@@ -495,6 +436,7 @@ export const Clients: React.FC = () => {
 
   return (
     <div className="min-h-screen" style={{ background: 'var(--bg-primary)' }}>
+      <SEO {...seoConfigs.clients} />
       <Navbar />
       
       <main className="container mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">

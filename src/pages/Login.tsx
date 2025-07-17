@@ -8,6 +8,8 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import { useAuthStore } from '../stores/authStore';
 import { useToastStore } from '../stores/toastStore';
 import { motion } from 'framer-motion';
+import { SEO } from '../components/SEO';
+import { seoConfigs } from '../utils/seoConfig';
 
 export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -46,6 +48,7 @@ export const Login: React.FC = () => {
 
   return (
     <div className="flex min-h-screen flex-col bg-gray-50 dark:bg-gray-900">
+      <SEO {...seoConfigs.login} />
       <header className="flex items-center justify-between p-4">
         <Logo size="xl" variant="default" />
         <ThemeToggle />

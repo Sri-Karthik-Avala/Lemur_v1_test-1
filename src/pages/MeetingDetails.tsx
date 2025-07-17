@@ -45,6 +45,8 @@ import { CollapsibleSection } from '../components/CollapsibleSection';
 import { TranscriptViewer } from '../components/TranscriptViewer';
 import { ApiService } from '../services/api';
 import { useToastStore } from '../stores/toastStore';
+import { SEO } from '../components/SEO';
+import { generateMeetingDetailsSEO } from '../utils/seoConfig';
 
 interface SimpleMeeting {
   id: string;
@@ -358,6 +360,13 @@ export const MeetingDetails: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-primary transition-colors duration-300">
+      <SEO 
+        {...generateMeetingDetailsSEO({
+          title: meeting.title,
+          description: meeting.summary || meeting.description,
+          date: meeting.date
+        })}
+      />
       <Navbar />
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <motion.div

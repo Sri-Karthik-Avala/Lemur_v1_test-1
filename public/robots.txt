@@ -1,0 +1,32 @@
+User-agent: *
+Allow: /
+Allow: /waitlist
+Allow: /login
+Allow: /signup
+Allow: /register
+
+# Disallow private/protected pages
+Disallow: /dashboard
+Disallow: /meetings
+Disallow: /clients
+Disallow: /settings
+Disallow: /api-test
+Disallow: /production
+
+# Allow crawling of static assets
+Allow: /assets/
+Allow: /images/
+Allow: /*.css
+Allow: /*.js
+Allow: /*.png
+Allow: /*.jpg
+Allow: /*.jpeg
+Allow: /*.gif
+Allow: /*.svg
+Allow: /*.ico
+
+# Sitemap location
+Sitemap: https://lemur-ai.com/sitemap.xml
+
+# Crawl delay (optional)
+Crawl-delay: 1
