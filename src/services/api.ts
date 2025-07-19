@@ -18,24 +18,51 @@ api.interceptors.request.use(
   (config) => {
     // Add auth token if available
     const token = localStorage.getItem('auth_token');
+    console.log('🔐 Auth interceptor:', { 
+      url: config.url, 
+      method: config.method?.toUpperCase(),
+      hasToken: !!token,
+      tokenPreview: token ? `${token.substring(0, 20)}...` : 'none'
+    });
+    
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
   (error) => {
+    console.error('Auth interceptor error:', error);
     return Promise.reject(error);
   }
 );
 
 // Response interceptor for handling common errors
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    console.log('✅ API Response:', {
+      url: response.config.url,
+      method: response.config.method?.toUpperCase(),
+      status: response.status,
+      statusText: response.statusText,
+      dataPreview: typeof response.data === 'object' ? Object.keys(response.data) : typeof response.data
+    });
+    return response;
+  },
   (error) => {
+    console.error('❌ API Error:', {
+      url: error.config?.url,
+      method: error.config?.method?.toUpperCase(),
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    });
+    
     if (error.response?.status === 401) {
-      // Handle unauthorized access
-      localStorage.removeItem('auth_token');
-      window.location.href = '/login';
+      // Handle unauthorized - could redirect to login
+      console.error('Unauthorized access - token may be expired');
+      // localStorage.removeItem('auth_token');
+      // window.location.href = '/login';
     }
     return Promise.reject(error);
   }
@@ -833,32 +860,52 @@ export class ApiService {
 
   // Upload Document - Attach files to a specific client
   static async uploadClientDocument(clientId: string, file: File): Promise<any> {
+    console.log('🚀 API: uploadClientDocument called:', { clientId, fileName: file.name, fileSize: file.size });
+    
     const formData = new FormData();
     formData.append('file', file);
     
-    const response = await api.post(`/client/${clientId}/upload-document`, formData, {
+    const url = `/client/${clientId}/upload-document`;
+    console.log('🚀 API: Making POST request to:', url);
+    
+    // For file uploads, we need to override the default Content-Type header
+    // and let the browser set it automatically for multipart/form-data
+    const response = await api.post(url, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
     });
+    console.log('✅ API: Upload response:', response.data);
     return response.data;
   }
 
   // Get Client Documents - List all documents and transcripts for a client
   static async getClientDocuments(clientId: string): Promise<any> {
-    const response = await api.get(`/client/${clientId}/documents`);
+    const url = `/client/${clientId}/documents`;
+    console.log('🚀 API: getClientDocuments called:', { clientId, url });
+    
+    const response = await api.get(url);
+    console.log('✅ API: Get documents response:', response.data);
     return response.data;
   }
 
   // Download Document - Generate a signed download URL (valid for 1 hour)
   static async getDocumentDownloadUrl(documentId: string): Promise<any> {
-    const response = await api.get(`/download-document/${documentId}`);
+    const url = `/download-document/${documentId}`;
+    console.log('🚀 API: getDocumentDownloadUrl called:', { documentId, url });
+    
+    const response = await api.get(url);
+    console.log('✅ API: Download URL response:', response.data);
     return response.data;
   }
 
   // Delete Document - Permanently remove a document from storage and database
   static async deleteDocument(documentId: string): Promise<any> {
-    const response = await api.delete(`/delete-document/${documentId}`);
+    const url = `/delete-document/${documentId}`;
+    console.log('🚀 API: deleteDocument called:', { documentId, url });
+    
+    const response = await api.delete(url);
+    console.log('✅ API: Delete response:', response.data);
     return response.data;
   }
 

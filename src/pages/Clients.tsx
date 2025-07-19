@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Navigate, Link, useNavigate } from 'react-router-dom';
 import { Building2, Users, Calendar, Mail, Phone, Plus, Search, Filter, FileText, Upload, Trash2, Download } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -43,6 +43,8 @@ export const Clients: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [uploadingFiles, setUploadingFiles] = useState<Set<string>>(new Set());
+  // Refs to hidden file inputs per client id
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
 
   // Fetch clients on component mount
@@ -90,11 +92,20 @@ export const Clients: React.FC = () => {
 
   const fetchClientDocuments = async (clientId: string) => {
     try {
-      const documents = await ApiService.getClientDocuments(clientId);
+      const documentsResponse = await ApiService.getClientDocuments(clientId);
+      const normalizedDocs: ClientDocument[] = (documentsResponse.documents || []).map((doc: any) => ({
+        id: (doc.document_id ?? doc.id ?? '').toString(),
+        original_filename: doc.original_filename ?? doc.filename ?? doc.file_name ?? 'Unknown',
+        filename: doc.filename ?? doc.original_filename ?? doc.file_name ?? 'file',
+        file_type: doc.file_type ?? doc.mime_type ?? 'unknown',
+        file_size: Number(doc.file_size ?? doc.size ?? 0),
+        created_at: doc.created_at ?? doc.uploaded_at ?? new Date().toISOString(),
+        processed: doc.processed ?? doc.status === 'processed' ?? false,
+      }));
       setClients(prevClients => 
         prevClients.map(client => 
           client.id === clientId 
-            ? { ...client, documents: documents.documents || [], documentsLoaded: true }
+            ? { ...client, documents: normalizedDocs, documentsLoaded: true }
             : client
         )
       );
@@ -163,9 +174,15 @@ export const Clients: React.FC = () => {
     }
   };
 
-  const handleFileUpload = async (clientId: string, files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const handleFileUpload = async (clientId: string, files: FileList | null, inputElement?: HTMLInputElement) => {
+    console.log('📤 Upload function called:', { clientId, filesCount: files?.length });
+    
+    if (!files || files.length === 0) {
+      console.log('❌ No files provided for upload');
+      return;
+    }
 
+    console.log('📤 Starting upload process...');
     setUploadingFiles(prev => new Set([...prev, clientId]));
     setError(null);
 
@@ -173,15 +190,48 @@ export const Clients: React.FC = () => {
       // Upload files one by one
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        await ApiService.uploadClientDocument(clientId, file);
+        console.log(`📤 Uploading file ${i + 1}/${files.length}:`, {
+          name: file.name,
+          size: file.size,
+          type: file.type
+        });
+        
+        const response = await ApiService.uploadClientDocument(clientId, file);
+        console.log(`✅ File ${file.name} uploaded successfully:`, response);
       }
 
+      console.log('🔄 All files uploaded, refreshing document list...');
       // Refresh client documents
       await fetchClientDocuments(clientId);
+      console.log('✅ Upload process completed successfully');
+      
+      // Clear the file input after successful upload
+      if (inputElement) {
+        inputElement.value = '';
+      }
       
     } catch (error: any) {
-      console.error('Failed to upload files:', error);
-      setError(error.response?.data?.message || 'Failed to upload files. Please try again.');
+      console.error('❌ Upload error details:', {
+        error,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message,
+        config: error.config
+      });
+      
+      let errorMessage = 'Failed to upload files. Please try again.';
+      if (error.response?.status === 413) {
+        errorMessage = 'File is too large. Please choose a smaller file.';
+      } else if (error.response?.status === 401) {
+        errorMessage = 'Authentication failed. Please log in again.';
+      } else if (error.response?.status === 400) {
+        errorMessage = error.response?.data?.message || 'Invalid file format or request.';
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setUploadingFiles(prev => {
         const updated = new Set(prev);
@@ -192,33 +242,85 @@ export const Clients: React.FC = () => {
   };
 
   const handleDownloadDocument = async (documentId: string, filename: string) => {
+    console.log('📥 Attempting to download document:', { documentId, filename });
     try {
       const response = await ApiService.getDocumentDownloadUrl(documentId);
-      if (response.download_url) {
-        // Create a temporary link and trigger download
+      console.log('📥 Download response:', response);
+      
+      const url = response.download_url || response.downloadUrl || response.url || response.signed_url;
+      if (url) {
+        console.log('✅ Download URL received, triggering download');
+        // Trigger download in new tab to avoid popup blockers
         const link = document.createElement('a');
-        link.href = response.download_url;
+        link.href = url;
         link.download = filename;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+      } else {
+        console.error('❌ No download URL in response:', response);
+        setError('Download URL not available. Please try again.');
       }
     } catch (error: any) {
-      console.error('Failed to download document:', error);
-      setError('Failed to download document. Please try again.');
+      console.error('❌ Download error details:', {
+        error,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      });
+      
+      let errorMessage = 'Failed to download document. Please try again.';
+      if (error.response?.status === 404) {
+        errorMessage = 'Document not found or has been deleted.';
+      } else if (error.response?.status === 401) {
+        errorMessage = 'Authentication failed. Please log in again.';
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      }
+      
+      setError(errorMessage);
     }
   };
 
   const handleDeleteDocument = async (documentId: string, clientId: string) => {
+    console.log('🗑️ Attempting to delete document:', { documentId, clientId });
+    
     if (window.confirm('Are you sure you want to delete this document? This action cannot be undone.')) {
       try {
-        await ApiService.deleteDocument(documentId);
+        console.log('🗑️ Calling delete API...');
+        const response = await ApiService.deleteDocument(documentId);
+        console.log('✅ Delete response:', response);
+        
         // Refresh client documents
+        console.log('🔄 Refreshing client documents...');
         await fetchClientDocuments(clientId);
+        console.log('✅ Document deleted and list refreshed');
+        
       } catch (error: any) {
-        console.error('Failed to delete document:', error);
-        setError('Failed to delete document. Please try again.');
+        console.error('❌ Delete error details:', {
+          error,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          message: error.message
+        });
+        
+        let errorMessage = 'Failed to delete document. Please try again.';
+        if (error.response?.status === 404) {
+          errorMessage = 'Document not found or already deleted.';
+        } else if (error.response?.status === 401) {
+          errorMessage = 'Authentication failed. Please log in again.';
+        } else if (error.response?.status === 403) {
+          errorMessage = 'You do not have permission to delete this document.';
+        } else if (error.response?.data?.message) {
+          errorMessage = error.response.data.message;
+        }
+        
+        setError(errorMessage);
       }
+    } else {
+      console.log('❌ Delete cancelled by user');
     }
   };
 
@@ -395,23 +497,23 @@ export const Clients: React.FC = () => {
                         {isExpanded ? 'Hide Documents' : 'View Documents'}
                       </Button>
                       
-                      <label className="relative">
-                        <input
-                          type="file"
-                          multiple
-                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                          onChange={(e) => handleFileUpload(client.id, e.target.files)}
-                          disabled={isUploading}
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          leftIcon={isUploading ? <LoadingSpinner size="sm" /> : <Upload className="h-4 w-4" />}
-                          disabled={isUploading}
-                        >
-                          {isUploading ? 'Uploading...' : 'Upload'}
-                        </Button>
-                      </label>
+                      {/* Hidden file input */}
+                      <input
+                        type="file"
+                        multiple
+                        style={{ display: 'none' }}
+                        ref={(el) => (fileInputRefs.current[client.id] = el)}
+                        onChange={(e) => handleFileUpload(client.id, e.target.files, e.target)}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => fileInputRefs.current[client.id]?.click()}
+                        leftIcon={isUploading ? <LoadingSpinner size="sm" /> : <Upload className="h-4 w-4" />}
+                        disabled={isUploading}
+                      >
+                        {isUploading ? 'Uploading...' : 'Upload'}
+                      </Button>
                     </div>
 
                     {/* Documents Section */}
