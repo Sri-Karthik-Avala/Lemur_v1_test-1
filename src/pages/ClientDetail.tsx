@@ -17,7 +17,7 @@ import { Navbar } from '../components/Navbar';
 import { Button } from '../components/Button';
 import { cn } from '../utils/cn';
 import { ApiService } from '../services/api'; // Adjust import path as needed
-
+// new changes 
 // API Meeting interface matching your backend response
 interface ApiMeeting {
   id: number;
